@@ -1,4 +1,4 @@
-import { toDataFrame, FieldType, ReducerID } from '@grafana/data';
+import { toDataFrame, FieldType, ReducerID, DataFrame } from '@grafana/data';
 
 import { FieldConfigHandlerKey } from '../fieldToConfigMapping/fieldToConfigMapping';
 
@@ -170,5 +170,75 @@ describe('value mapping from data', () => {
         },
       ]
     `);
+  });
+});
+
+describe('multiple threshold transforms (mergeConfig behavior)', () => {
+  const valueConfig = {
+    thresholds: { mode: 'absolute', steps: [{ value: -Infinity, color: 'green' }] },
+  };
+
+  const series = toDataFrame({
+    fields: [
+      { name: 'Time', type: FieldType.time, values: [1, 2, 3] },
+      { name: 'Value', type: FieldType.number, values: [10, 60, 90], config: valueConfig },
+    ],
+  });
+
+  const applyThreshold = (data: DataFrame[], value: number, color: string, refId = 'Config') => {
+    const config = toDataFrame({
+      fields: [{ name: 'Threshold', type: FieldType.number, values: [value] }],
+      refId,
+    });
+
+    const options: ConfigFromQueryTransformOptions = {
+      configRefId: refId,
+      mappings: [
+        {
+          fieldName: 'Threshold',
+          handlerKey: 'threshold1',
+          handlerArguments: { threshold: { color } },
+        },
+      ],
+    };
+
+    return extractConfigFromQuery(options, [config, ...data]);
+  };
+
+  const getSteps = (data: DataFrame[]) => data[0].fields[1].config.thresholds?.steps || [];
+  const getValues = (data: DataFrame[]) => getSteps(data).map((s) => s.value);
+  const getColors = (data: DataFrame[]) => getSteps(data).map((s) => s.color);
+
+  it('merges thresholds from multiple transforms', () => {
+    let result = applyThreshold([series], 50, 'yellow', 'Config1');
+    result = applyThreshold(result, 80, 'red', 'Config2');
+
+    expect(getValues(result)).toEqual([-Infinity, 50, 80]);
+    expect(getColors(result)).toEqual(['green', 'yellow', 'red']);
+  });
+
+  it('deduplicates thresholds with same value (keeps last)', () => {
+    let result = applyThreshold([series], 50, 'yellow', 'Config1');
+    result = applyThreshold(result, 50, 'orange', 'Config2');
+
+    expect(getValues(result)).toEqual([-Infinity, 50]);
+    expect(getColors(result)).toEqual(['green', 'orange']);
+  });
+
+  it('sorts thresholds by value', () => {
+    let result = applyThreshold([series], 80, 'red', 'Config1');
+    result = applyThreshold(result, 50, 'yellow', 'Config2');
+
+    expect(getValues(result)).toEqual([-Infinity, 50, 80]);
+    expect(getColors(result)).toEqual(['green', 'yellow', 'red']);
+  });
+
+  it('merges three thresholds', () => {
+    let result = applyThreshold([series], 30, 'blue', 'Config1');
+    result = applyThreshold(result, 60, 'yellow', 'Config2');
+    result = applyThreshold(result, 90, 'red', 'Config3');
+
+    expect(getValues(result)).toEqual([-Infinity, 30, 60, 90]);
+    expect(getColors(result)).toEqual(['green', 'blue', 'yellow', 'red']);
   });
 });

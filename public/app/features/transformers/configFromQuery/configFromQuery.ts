@@ -4,6 +4,7 @@ import {
   DataFrame,
   DataTransformerID,
   DataTransformerInfo,
+  FieldConfig,
   FieldMatcherID,
   getFieldDisplayName,
   getFieldMatcher,
@@ -22,6 +23,26 @@ export interface ConfigFromQueryTransformOptions {
   configRefId?: string;
   mappings: FieldToConfigMapping[];
   applyTo?: MatcherConfig;
+}
+
+function mergeConfig<TOptions = any>(
+  target: FieldConfig<TOptions>,
+  source: FieldConfig<TOptions>
+): FieldConfig<TOptions> {
+  const result = { ...target, ...source } as FieldConfig<TOptions>;
+  const targetSteps = target.thresholds?.steps;
+  const sourceSteps = source.thresholds?.steps;
+
+  // merge steps (multiple transforms)
+  if (Array.isArray(targetSteps) && Array.isArray(sourceSteps)) {
+    const merged = [...targetSteps, ...sourceSteps].sort((a, b) => (a as any).value - (b as any).value);
+    const deduped = merged.filter(
+      (step, index) => index === merged.length - 1 || step.value !== merged[index + 1].value
+    );
+    result.thresholds!.steps = deduped;
+  }
+
+  return result;
 }
 
 export function extractConfigFromQuery(options: ConfigFromQueryTransformOptions, data: DataFrame[]) {
@@ -73,13 +94,8 @@ export function extractConfigFromQuery(options: ConfigFromQueryTransformOptions,
     for (const field of frame.fields) {
       if (matcher(field, frame, data)) {
         const dataConfig = getFieldConfigFromFrame(reducedConfigFrame, 0, mappingResult);
-        outputFrame.fields.push({
-          ...field,
-          config: {
-            ...field.config,
-            ...dataConfig,
-          },
-        });
+        const config = mergeConfig(field.config, dataConfig);
+        outputFrame.fields.push({ ...field, config });
       } else {
         outputFrame.fields.push(field);
       }
